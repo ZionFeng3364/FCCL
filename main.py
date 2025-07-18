@@ -1,5 +1,6 @@
 import argparse
 import wandb, os
+from methods.moe import Moe
 from utils.data_manager import DataManager, setup_seed
 from utils.toolkit import count_parameters
 from methods.finetune import Finetune
@@ -23,6 +24,8 @@ def get_learner(model_name, args):
         return Finetune(args)
     elif name == "ours":
         return TARGET(args)
+    elif name == "moe":
+        return Moe(args)
     else:
         assert 0
         
