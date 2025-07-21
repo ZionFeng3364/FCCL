@@ -552,6 +552,85 @@ class MoE(BaseLearner):
     def after_task(self):
         self._known_classes = self._total_classes
         self._old_network = self._network.copy().freeze()
+        # 添加打印合成数据集信息的函数调用
+        self._print_synthetic_data_info()
+
+    def _print_synthetic_data_info(self):
+        """
+        打印当前任务的合成数据集相关信息以及历史任务的累计信息
+        """
+        # 当前任务的合成数据信息
+        current_data_dir = os.path.join(self.save_dir, "task_{}".format(self._cur_task))
+
+        current_total_images = 0
+        if os.path.exists(current_data_dir):
+            current_image_files = _collect_all_images(None, current_data_dir)
+            current_total_images = len(current_image_files)
+
+        print(f"\n{'=' * 60}")
+        print(f"Task {self._cur_task} 合成数据集详细信息:")
+        print(f"{'=' * 60}")
+
+        if current_total_images > 0:
+            print(f"当前任务数据目录: {current_data_dir}")
+            print(f"当前任务合成图像数: {current_total_images}")
+            print(f"示例文件: {current_image_files[0]}")
+        else:
+            print(f"当前任务: 未找到合成数据或目录不存在")
+
+        # 统计所有历史任务的合成数据
+        if self._cur_task > 0:
+            print(f"\n{'=' * 60}")
+            print(f"历史任务合成数据统计:")
+            print(f"{'=' * 60}")
+
+            total_historical_images = 0
+            for task_id in range(self._cur_task):
+                task_data_dir = os.path.join(self.save_dir, "task_{}".format(task_id))
+                if os.path.exists(task_data_dir):
+                    task_image_files = _collect_all_images(None, task_data_dir)
+                    task_images_count = len(task_image_files)
+                    total_historical_images += task_images_count
+                    print(f"  Task {task_id}: {task_images_count} 个合成图像")
+                else:
+                    print(f"  Task {task_id}: 数据目录不存在")
+
+            print(f"  历史任务合成数据总计: {total_historical_images} 个图像")
+
+            # 总体统计
+            all_images_count = total_historical_images + current_total_images
+            print(f"\n所有任务合成数据总计: {all_images_count} 个图像")
+
+            if self._total_classes > 0:
+                avg_per_class_all = all_images_count / self._total_classes
+                print(f"平均每类合成数据量（所有任务）: {avg_per_class_all:.1f}")
+
+        # 任务和类别信息
+        print(f"\n{'=' * 60}")
+        print(f"任务和类别信息:")
+        print(f"{'=' * 60}")
+        print(f"当前任务ID: {self._cur_task}")
+        print(f"已知类别数: {self._known_classes}")
+        print(f"总类别数: {self._total_classes}")
+
+        if self._cur_task == 0:
+            print(f"当前任务类别数: {self._total_classes}")
+        else:
+            print(f"当前任务新增类别数: {self._total_classes - self._known_classes}")
+
+        # 训练配置信息
+        print(f"\n{'=' * 60}")
+        print(f"训练配置信息:")
+        print(f"{'=' * 60}")
+        print(f"合成批次大小: {synthesis_batch_size}")
+        print(f"采样批次大小: {sample_batch_size}")
+        print(f"生成器训练轮数: {syn_round}")
+        print(f"知识蒸馏步数: {kd_steps}")
+        print(f"生成器学习率: {lr_g}")
+        print(f"潜在向量学习率: {lr_z}")
+        print(f"温度参数T: {T}")
+
+        print(f"{'=' * 60}\n")
 
     def kd_train(self, student, teacher, criterion, optimizer):
         student.train()
