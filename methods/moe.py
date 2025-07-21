@@ -548,12 +548,20 @@ class MoE(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
         self._network = IncrementalNet(args, False)
+        # 添加存储历史模型的列表
+        self.global_models = []
 
     def after_task(self):
         self._known_classes = self._total_classes
         self._old_network = self._network.copy().freeze()
+        # 保存当前任务完成后的全局模型
+        current_model = self._network.copy().freeze()
+        self.global_models.append(current_model)
+
         # 添加打印合成数据集信息的函数调用
         self._print_synthetic_data_info()
+        # 测试所有历史模型
+        self._test_all_global_models()
 
     def _print_synthetic_data_info(self):
             """
@@ -707,6 +715,33 @@ class MoE(BaseLearner):
         all_soft_labels = torch.cat(soft_labels_list, dim=0)
 
         return all_images, all_soft_labels
+
+    def _test_all_global_models(self):
+        """
+        测试所有存储的全局模型
+        """
+        print(f"\n{'=' * 60}")
+        print(f"测试所有历史全局模型 (Task {self._cur_task} 完成后)")
+        print(f"{'=' * 60}")
+
+        for model_idx, model in enumerate(self.global_models):
+            model.eval()
+
+            # 使用现有的测试逻辑
+            correct, total = 0, 0
+            for i, (_, inputs, targets) in enumerate(self.test_loader):
+                inputs = inputs.cuda()
+                targets = targets.cuda()
+                with torch.no_grad():
+                    outputs = model(inputs)['logits']
+                predicts = torch.max(outputs, dim=1)[1]
+                correct += (predicts.cpu() == targets.cpu()).sum()
+                total += len(targets)
+
+            accuracy = 100 * correct / total
+            print(f"模型 {model_idx} (训练至Task {model_idx}): 准确率 {accuracy:.2f}%")
+
+        print(f"{'=' * 60}\n")
 
     def kd_train(self, student, teacher, criterion, optimizer):
         student.train()
