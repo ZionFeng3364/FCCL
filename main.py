@@ -44,8 +44,7 @@ def train(args):
         args["increment"],
     )
     learner = get_learner(args["method"], args)
-    cnn_curve, nme_curve = {"top1": [], "top5": []}, {"top1": [], "top5": []}
-    
+    cnn_curve, nme_curve = {"top1": [], "top5": [], "forgetting": []}, {"top1": [], "top5": []}
     # train for each task
     for task in range(data_manager.nb_tasks):
         print("All params: {}, Trainable params: {}".format(count_parameters(learner._network), 
@@ -55,8 +54,17 @@ def train(args):
         learner.after_task()
 
         print("CNN: {}".format(cnn_accy["grouped"]))
+        # 从 cnn_accy 字典中获取遗忘率并打印
+        forgetting_rate = cnn_accy.get("forgetting", 0.0)
+        print("CNN Forgetting: {}".format(forgetting_rate))
+
+        # 将准确率和遗忘率存入历史记录
         cnn_curve["top1"].append(cnn_accy["top1"])
+        cnn_curve["forgetting"].append(forgetting_rate)
+
+        # 打印历史曲线，现在同时包含准确率和遗忘率
         print("CNN top1 curve: {}".format(cnn_curve["top1"]))
+        print("CNN forgetting curve: {}".format(cnn_curve["forgetting"]))
 
 
 
@@ -84,7 +92,7 @@ def args_parser():
     parser.add_argument('--num_users', type=int, default=5, help='num of clients')
     parser.add_argument('--local_bs', type=int, default=128, help='local batch size')
     parser.add_argument('--local_ep', type=int, default=5, help='local training epochs')
-    parser.add_argument('--beta', type=float, default=0.3, help='control the degree of label skew')
+    parser.add_argument('--beta', type=float, default=0.5, help='control the degree of label skew')
     parser.add_argument('--frac', type=float, default=1.0, help='the fraction of selected clients')
     parser.add_argument('--nums', type=int, default=8000, help='the num of synthetic data')
     parser.add_argument('--kd', type=int, default=25, help='for kd loss')

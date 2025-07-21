@@ -42,6 +42,9 @@ class BaseLearner(object):
         self._device = "0"
         # self._multiple_gpus = args["device"]
 
+        # 添加一个新字典来存储每个任务的峰值准确率
+        self.peak_accuracies = {}
+
     @property
     def exemplar_size(self):
         assert len(self._data_memory) == len(
@@ -122,13 +125,48 @@ class BaseLearner(object):
 
     def _evaluate(self, y_pred, y_true):
         ret = {}
+        # 调用accuracy函数计算各类准确率
         grouped = accuracy(y_pred.T[0], y_true, self._known_classes, increment=self.each_task)
-        ret["grouped"] = grouped
-        ret["top1"] = grouped["total"]
+        ret["grouped"] = grouped  # 包含所有分组准确率的字典
+        ret["top1"] = grouped["total"]  # 总体top1准确率
         ret["top{}".format(self.topk)] = np.around(
             (y_pred.T == np.tile(y_true, (self.topk, 1))).sum() * 100 / len(y_true),
             decimals=2,
         )
+
+        # 计算平均遗忘率并更新历史记录
+
+        # 只有在学习过至少一个任务后（即进入第二个或之后的任务时），才计算遗忘率
+        if self._known_classes > 0:
+            forgetting_values = []  # 用于存储每个旧任务的遗忘值
+
+            # 遍历 `self.peak_accuracies` 字典中所有已记录的旧任务
+            for task_label, peak_acc in self.peak_accuracies.items():
+                # 从 `grouped` 字典中获取该旧任务当前的准确率
+                current_acc = grouped.get(task_label, 0)
+
+                # 计算遗忘值 = 历史峰值准确率 - 当前准确率
+                forgetting = peak_acc - current_acc
+                forgetting_values.append(forgetting)
+
+            # 计算所有旧任务的平均遗忘率
+            avg_forgetting = np.mean(forgetting_values) if len(forgetting_values) > 0 else 0.0
+            # 将计算出的平均遗忘率存入返回结果字典
+            ret["forgetting"] = np.around(avg_forgetting, decimals=2)
+        else:
+            # 对于第一个任务，不存在旧任务，所以遗忘率为0
+            ret["forgetting"] = 0.0
+
+        # 关键步骤：用新学任务的准确率来更新历史峰值记录
+        # 只有当'new'准确率存在且大于0时才更新（避免空任务或评估错误）
+        if 'new' in grouped and grouped['new'] > 0:
+            # 根据当前已知的类别数，构造新任务的标签（例如 "00-19", "20-39"）
+            new_task_label = "{}-{}".format(
+                str(self._known_classes).rjust(2, "0"),
+                str(self._known_classes + self.each_task - 1).rjust(2, "0")
+            )
+            # 将新任务的准确率（即'new'准确率）作为其峰值准确率存入字典中，供未来计算使用
+            self.peak_accuracies[new_task_label] = grouped['new']
 
         return ret
 
