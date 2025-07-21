@@ -1,6 +1,6 @@
 import argparse
 import wandb, os
-from methods.moe import Moe
+from methods.moe import MoE
 from utils.data_manager import DataManager, setup_seed
 from utils.toolkit import count_parameters
 from methods.finetune import Finetune
@@ -25,7 +25,7 @@ def get_learner(model_name, args):
     elif name == "ours":
         return TARGET(args)
     elif name == "moe":
-        return Moe(args)
+        return MoE(args)
     else:
         assert 0
         
@@ -112,7 +112,7 @@ if __name__ == '__main__':
     args.increment = args.init_cls
 
     args.exp_name = f"{args.beta}_{args.method}_{args.exp_name}"
-    if args.method == "ours":
+    if args.method == "ours" or args.method == "moe":
         dir = "run"
         if not os.path.exists(dir):
             os.makedirs(dir) 
