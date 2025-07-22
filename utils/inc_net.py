@@ -54,6 +54,78 @@ class PretrainedResNet50(nn.Module):
             'features': features
         }
 
+class PretrainedResNet18(nn.Module):
+    def __init__(self, args):
+        super(PretrainedResNet18, self).__init__()
+
+        # 根据数据集类型调整conv1层（这是关键差异！）
+        if 'cifar' in args.get("dataset", "").lower():
+            # CIFAR数据集：使用3x3 conv，stride=1，无MaxPool
+            self.conv1 = nn.Sequential(
+                nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True)
+            )
+        else:
+            # ImageNet或其他数据集：使用标准7x7 conv + MaxPool
+            resnet = models.resnet18(pretrained=False)
+            self.conv1 = nn.Sequential(
+                resnet.conv1,
+                resnet.bn1,
+                resnet.relu,
+                resnet.maxpool
+            )
+
+        # 构建ResNet层，但需要适配原代码的BasicBlock
+        from convs.ucir_resnet import BasicBlock
+
+        # 使用原代码的_make_layer逻辑
+        self.inplanes = 64
+        self.layer1 = self._make_layer(BasicBlock, 64, 2)
+        self.layer2 = self._make_layer(BasicBlock, 128, 2, stride=2)
+        self.layer3 = self._make_layer(BasicBlock, 256, 2, stride=2)
+        self.layer4 = self._make_layer(BasicBlock, 512, 2, stride=2, last_phase=True)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.out_dim = 512
+
+    def _make_layer(self, block, planes, blocks, stride=1, last_phase=False):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                         kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+
+        for i in range(1, blocks):
+            # 最后一个block设置last=True（这是性能差异的关键！）
+            if last_phase and i == blocks - 1:
+                layers.append(block(self.inplanes, planes, last=True))
+            else:
+                layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x_1 = self.layer1(x)
+        x_2 = self.layer2(x_1)
+        x_3 = self.layer3(x_2)
+        x_4 = self.layer4(x_3)
+
+        pooled = self.avgpool(x_4)
+        features = torch.flatten(pooled, 1)
+
+        return {
+            'fmaps': [x_1, x_2, x_3, x_4],
+            'features': features
+        }
+
 def get_convnet(args, pretrained=False):
     name = args["net"].lower()
     if name == "resnet32":
@@ -82,6 +154,8 @@ def get_convnet(args, pretrained=False):
         return resnet50_cbam(pretrained=pretrained,args=args)
     elif name == "resnet50p":  # 新增的预训练ResNet50
         return PretrainedResNet50(args)
+    elif name == "resnet18p":  # 新增的预训练ResNet18
+        return PretrainedResNet18(args)
     else:
         raise NotImplementedError("Unknown type {}".format(name))
 
