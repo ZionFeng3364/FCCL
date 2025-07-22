@@ -892,13 +892,7 @@ class MoE(BaseLearner):
                     t_out = teacher(syn_input.detach())["logits"]
                     total_syn += syn_input.shape[0]
                     total_local += images.shape[0]
-                # for old task
-                loss_kd = _KD_loss(
-                    s_out[:, : self._known_classes],  # logits on previous tasks
-                    t_out.detach(),
-                    2,
-                )
-                loss = loss_ce + self.args["kd"] * loss_kd
+                loss = loss_ce
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -940,10 +934,4 @@ class MoE(BaseLearner):
                 prog_bar.set_description(info)
                 if self.wandb == 1:
                     wandb.log({'Task_{}, accuracy'.format(self._cur_task): test_acc})
-
-
-def _KD_loss(pred, soft, T):
-    pred = torch.log_softmax(pred / T, dim=1)
-    soft = torch.softmax(soft / T, dim=1)
-    return -1 * torch.mul(soft, pred).sum() / pred.shape[0]
 
