@@ -11,7 +11,48 @@ from convs.ucir_resnet import resnet50 as cosine_resnet50
 from convs.linears import SimpleLinear, SplitCosineLinear, CosineLinear
 from convs.modified_represnet import resnet18_rep,resnet34_rep
 from convs.resnet_cbam import resnet18_cbam,resnet34_cbam,resnet50_cbam
+from torchvision import models
 
+
+class PretrainedResNet50(nn.Module):
+    def __init__(self, args):
+        super(PretrainedResNet50, self).__init__()
+        # 加载预训练的ResNet50
+        resnet = models.resnet50(pretrained=True)
+
+        # 分别提取各个层
+        self.conv1 = nn.Sequential(
+            resnet.conv1,
+            resnet.bn1,
+            resnet.relu,
+            resnet.maxpool
+        )
+        self.layer1 = resnet.layer1
+        self.layer2 = resnet.layer2
+        self.layer3 = resnet.layer3
+        self.layer4 = resnet.layer4
+        self.avgpool = resnet.avgpool
+
+        # 冻结所有参数
+        for param in self.parameters():
+            param.requires_grad = False
+
+        self.out_dim = 2048  # ResNet50的特征维度
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x_1 = self.layer1(x)
+        x_2 = self.layer2(x_1)
+        x_3 = self.layer3(x_2)
+        x_4 = self.layer4(x_3)
+
+        pooled = self.avgpool(x_4)
+        features = torch.flatten(pooled, 1)
+
+        return {
+            'fmaps': [x_1, x_2, x_3, x_4],  # 返回中间特征图
+            'features': features
+        }
 
 def get_convnet(args, pretrained=False):
     name = args["net"].lower()
@@ -39,6 +80,8 @@ def get_convnet(args, pretrained=False):
         return resnet34_cbam(pretrained=pretrained,args=args)
     elif name == "resnet50_cbam":
         return resnet50_cbam(pretrained=pretrained,args=args)
+    elif name == "resnet50p":  # 新增的预训练ResNet50
+        return PretrainedResNet50(args)
     else:
         raise NotImplementedError("Unknown type {}".format(name))
 
