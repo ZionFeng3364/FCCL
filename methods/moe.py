@@ -568,17 +568,31 @@ class MoE(BaseLearner):
 
     def _collect_all_synthetic_data(self):
         """
-        收集所有任务的合成数据和软标签
+        收集所有任务的合成数据和软标签，并按任务ID组织存储
         """
+        # 初始化按任务ID存储合成数据的字典
+        self.synthetic_data_by_task = {}
+
         all_images = []
         all_soft_labels = []
 
         # 收集所有任务（包括当前任务）的数据
         for task_id in range(self._cur_task + 1):
             task_images, task_labels = self._load_task_synthetic_data(task_id)
+
             if task_images is not None:
+                # 按任务ID存储
+                self.synthetic_data_by_task[task_id] = {
+                    'images': task_images,
+                    'labels': task_labels
+                }
+
+                # 合并到总数据中
                 all_images.append(task_images)
                 all_soft_labels.append(task_labels)
+            else:
+                # 任务没有数据时也记录
+                self.synthetic_data_by_task[task_id] = None
 
         # 合并所有数据
         if all_images:
@@ -587,6 +601,22 @@ class MoE(BaseLearner):
         else:
             self.all_synthetic_images = None
             self.all_synthetic_labels = None
+
+    def get_synthetic_data_by_task(self, task_id):
+        """
+        根据特定任务ID获取合成数据
+
+        Args:
+            task_id (int): 任务ID
+
+        Returns:
+            dict: 包含images和labels的字典，如果任务不存在则返回None
+        """
+        if not hasattr(self, 'synthetic_data_by_task'):
+            print(f"警告: 合成数据尚未收集，请先调用 _collect_all_synthetic_data()")
+            return None
+
+        return self.synthetic_data_by_task.get(task_id, None)
 
     def _print_synthetic_data_info(self):
         """
