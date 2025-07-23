@@ -832,6 +832,8 @@ class MoE(BaseLearner):
         self._total_classes = self._known_classes + data_manager.get_task_size(
             self._cur_task
         )
+        # 新增：重新初始化网络
+        self._network = IncrementalNet(self.args, False)
         self._network.update_fc(self._total_classes)
         print("Learning on {}-{}".format(self._known_classes, self._total_classes))
 
@@ -855,8 +857,8 @@ class MoE(BaseLearner):
 
         # * for all tasks
         self._fl_train(train_dataset, self.test_loader)
-        if self._cur_task + 1 != self.tasks:
-            self.data_generation()
+        # if self._cur_task + 1 != self.tasks:
+        self.data_generation()
 
     def _local_update(self, model, train_data_loader):
         model.train()
