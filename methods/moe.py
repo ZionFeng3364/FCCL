@@ -567,6 +567,8 @@ class MoE(BaseLearner):
         self._track_and_print_test_data_info()
         # 测试所有历史模型
         self._test_all_global_models()
+        # 测试历史模型在对应任务数据上的表现
+        self._test_global_models_on_corresponding_tasks()
 
     def _track_and_print_test_data_info(self):
         """
@@ -614,6 +616,61 @@ class MoE(BaseLearner):
             print(f"  Task {task_id}: {task_samples} 个测试样本 (类别 {task_start}-{task_end})")
 
         print(f"{'=' * 60}\n")
+
+    def _test_global_models_on_corresponding_tasks(self):
+        """
+        让每个全局历史模型在其对应任务的测试数据上进行测试
+        """
+        print(f"\n{'=' * 60}")
+        print(f"历史全局模型在对应任务数据上的测试结果")
+        print(f"{'=' * 60}")
+
+        increment = self.args['increment']
+
+        for model_idx, model in enumerate(self.global_models):
+            model.eval()
+
+            # 计算该模型对应任务的类别范围
+            task_start = model_idx * increment
+            task_end = task_start + increment - 1
+            task_classes = list(range(task_start, task_end + 1))
+
+            print(f"\n模型 {model_idx} (训练至Task {model_idx}) 在 Task {model_idx} 数据上测试:")
+            print(f"  测试类别范围: {task_start}-{task_end}")
+
+            correct, total = 0, 0
+
+            for _, inputs, targets in self.test_loader:
+                inputs = inputs.cuda()
+                targets_numpy = targets.numpy()
+
+                # 只选择属于当前任务的样本
+                task_mask = np.isin(targets_numpy, task_classes)
+                if not np.any(task_mask):
+                    continue
+
+                # 筛选出当前任务的数据
+                task_inputs = inputs[task_mask]
+                task_targets = targets[task_mask].cuda()
+
+                if len(task_inputs) == 0:
+                    continue
+
+                with torch.no_grad():
+                    outputs = model(task_inputs)["logits"]
+
+                predicts = torch.max(outputs, dim=1)[1]
+                correct += (predicts.cpu() == task_targets.cpu()).sum()
+                total += len(task_targets)
+
+            if total > 0:
+                accuracy = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+                print(f"  测试样本数: {total}")
+                print(f"  准确率: {accuracy:.2f}%")
+            else:
+                print(f"  警告: 未找到Task {model_idx}的测试数据")
+
+        print(f"\n{'=' * 60}\n")
 
     def _collect_all_synthetic_data(self):
         """
