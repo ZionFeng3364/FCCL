@@ -563,8 +563,57 @@ class MoE(BaseLearner):
         self._collect_all_synthetic_data()
         # 再打印信息
         self._print_synthetic_data_info()
+        # 跟踪和打印测试数据信息
+        self._track_and_print_test_data_info()
         # 测试所有历史模型
         self._test_all_global_models()
+
+    def _track_and_print_test_data_info(self):
+        """
+        跟踪并打印测试数据的任务和类别分布信息
+        在after_task后调用
+        """
+        print(f"\n{'=' * 60}")
+        print(f"测试数据信息 (Task {self._cur_task} 完成后)")
+        print(f"{'=' * 60}")
+
+        # 统计测试数据中每个类别的样本数
+        class_counts = {}
+        total_test_samples = 0
+
+        for _, inputs, targets in self.test_loader:
+            targets_numpy = targets.numpy()
+            total_test_samples += len(targets_numpy)
+
+            for target in targets_numpy:
+                class_counts[target] = class_counts.get(target, 0) + 1
+
+        # 计算当前任务的类别范围
+        increment = self.args['increment']
+        start_class = self._cur_task * increment
+        end_class = start_class + increment - 1
+        current_task_classes = list(range(start_class, end_class + 1))
+
+        # 统计当前任务的测试样本数
+        current_task_samples = sum(class_counts.get(cls, 0) for cls in current_task_classes)
+
+        print(f"当前任务: Task {self._cur_task}")
+        print(f"当前任务类别: {start_class}-{end_class} (共{increment}个类别)")
+        print(f"当前任务测试样本数: {current_task_samples}")
+        print(f"累计类别数: {self._total_classes}")
+        print(f"总测试样本数: {total_test_samples}")
+
+        # 显示所有任务的测试数据分布
+        print(f"\n各任务测试数据分布:")
+        for task_id in range(self._cur_task + 1):
+            task_start = task_id * increment
+            task_end = task_start + increment - 1
+            task_classes = list(range(task_start, task_end + 1))
+            task_samples = sum(class_counts.get(cls, 0) for cls in task_classes)
+
+            print(f"  Task {task_id}: {task_samples} 个测试样本 (类别 {task_start}-{task_end})")
+
+        print(f"{'=' * 60}\n")
 
     def _collect_all_synthetic_data(self):
         """
