@@ -543,6 +543,7 @@ def refine_as_not_true(logits, targets, num_classes):
 
     return logits
 
+from utils.toolkit import tensor2numpy
 
 class MoE(BaseLearner):
     def __init__(self, args):
@@ -720,31 +721,35 @@ class MoE(BaseLearner):
         return all_images, all_soft_labels
 
     def _test_all_global_models(self):
-        """
-        测试所有存储的全局模型
-        """
-        print(f"\n{'=' * 60}")
-        print(f"测试所有历史全局模型 (Task {self._cur_task} 完成后)")
-        print(f"{'=' * 60}")
+            """
+            测试所有存储的全局模型
+            """
+            print(f"\n{'=' * 60}")
+            print(f"测试所有历史全局模型 (Task {self._cur_task} 完成后)")
+            print(f"{'=' * 60}")
 
-        for model_idx, model in enumerate(self.global_models):
-            model.eval()
+            for model_idx, model in enumerate(self.global_models):
+                model.eval()
+                correct, total = 0, 0
 
-            # 使用现有的测试逻辑
-            correct, total = 0, 0
-            for i, (_, inputs, targets) in enumerate(self.test_loader):
-                inputs = inputs.cuda()
-                targets = targets.cuda()
-                with torch.no_grad():
-                    outputs = model(inputs)['logits']
-                predicts = torch.max(outputs, dim=1)[1]
-                correct += (predicts.cpu() == targets.cpu()).sum()
-                total += len(targets)
+                for i, (_, inputs, targets) in enumerate(self.test_loader):
+                    inputs = inputs.cuda()
+                    targets = targets.cuda()
+                    with torch.no_grad():
+                        # 参考 _compute_accuracy 方法的处理方式
+                        outputs = model(inputs)["logits"]
 
-            accuracy = 100 * correct / total
-            print(f"模型 {model_idx} (训练至Task {model_idx}): 准确率 {accuracy:.2f}%")
+                    predicts = torch.max(outputs, dim=1)[1]
+                    correct += (predicts.cpu() == targets.cpu()).sum()
+                    total += len(targets)
 
-        print(f"{'=' * 60}\n")
+                if total > 0:
+                    accuracy = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+                    print(f"模型 {model_idx} (训练至Task {model_idx}): 准确率 {accuracy:.2f}%")
+                else:
+                    print(f"模型 {model_idx}: 无法计算准确率")
+
+            print(f"{'=' * 60}\n")
 
     def kd_train(self, student, teacher, criterion, optimizer):
         student.train()
