@@ -430,6 +430,7 @@ class GlobalSynthesizer(ABC):
                 loss_adv = -(kldiv(s_out, t_out, reduction='none').sum(1) * mask).mean()  # adversarial distillation
             else:
                 loss_adv = loss_oh.new_zeros(1)
+            loss_adv = 0.0
             loss = self.bn * loss_bn + self.oh * loss_oh + self.adv * loss_adv
             with torch.no_grad():
                 if best_cost > loss.item() or best_inputs is None:
