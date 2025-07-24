@@ -545,6 +545,41 @@ def refine_as_not_true(logits, targets, num_classes):
 
 from utils.toolkit import tensor2numpy
 
+class FixedRandomExtractor(nn.Module):
+    def __init__(self, projection_dim=512, seed=42):
+        super().__init__()
+        torch.manual_seed(seed)
+
+        # 使用预训练的ResNet18作为特征提取器
+        import torchvision.models as models
+        self.backbone = models.resnet18(pretrained=True)
+
+        # 移除最后的分类层，保留特征提取部分
+        self.backbone = nn.Sequential(*list(self.backbone.children())[:-1])  # 移除最后的fc层
+
+        # 添加自定义投影层
+        self.projection = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, projection_dim, bias=False)  # ResNet18的feature dim是512
+        )
+
+        # 冻结预训练backbone的所有参数
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+
+        # 冻结投影层参数（使其成为固定的随机投影）
+        for param in self.projection.parameters():
+            param.requires_grad = False
+
+        print(f"固定预训练ResNet18投影器初始化完成 (种子: {seed}, 输出维度: {projection_dim})")
+
+    def forward(self, x):
+        # 通过预训练的ResNet18提取特征
+        features = self.backbone(x)  # [B, 512, 1, 1]
+        # 通过固定的随机投影层
+        projected = self.projection(features)  # [B, projection_dim]
+        return projected
+
 class MoE(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
@@ -552,6 +587,12 @@ class MoE(BaseLearner):
         self._network = IncrementalNet(args, False)
         # 添加存储历史模型的列表
         self.global_models = []
+
+        self.fixed_extractor = FixedRandomExtractor(projection_dim=self._network.feature_dim,
+                                                    seed=self.seed)
+        self.fixed_extractor.cuda()
+        self.task_centroids = {}
+        self.synthetic_data_by_task = {}
 
     def after_task(self):
         self._known_classes = self._total_classes
@@ -568,6 +609,145 @@ class MoE(BaseLearner):
         # self._test_all_global_models()
         # 测试历史模型在对应任务数据上的表现
         self._test_global_models_on_corresponding_tasks()
+
+    def compute_and_analyze_separability(self):
+        """计算质心并分析任务可分性的核心函数"""
+        print(f"\n{'='*60}")
+        print(f"任务可分性分析 (Task {self._cur_task}) - 使用预训练ResNet18投影")
+        print(f"{'='*60}")
+
+        # 确保投影器处于评估模式
+        self.fixed_extractor.eval()
+
+        # 1. 用合成数据计算质心（这个还是需要的）
+        if self._cur_task in self.synthetic_data_by_task:
+            images = self.synthetic_data_by_task[self._cur_task]['images']
+            print(f"为Task {self._cur_task}计算质心 (合成样本数: {len(images)})")
+
+            projections = []
+            with torch.no_grad():
+                for i in range(0, len(images), 64):
+                    batch = images[i:i+64].cuda()
+                    proj = self.fixed_extractor(batch)
+                    projections.append(proj.cpu())
+
+            all_projections = torch.cat(projections, dim=0)
+            self.task_centroids[self._cur_task] = torch.mean(all_projections, dim=0)
+            print(f"Task {self._cur_task} 质心计算完成，投影维度: {all_projections.shape[1]}")
+
+        available_tasks = list(self.task_centroids.keys())
+        if len(available_tasks) < 2:
+            print("需要至少2个任务进行可分性分析")
+            return
+
+        # 2. 计算质心间距离
+        print(f"\n质心间距离矩阵 (欧氏距离):")
+        print("Task\t" + "\t".join([str(t) for t in available_tasks]))
+
+        inter_distances = {}
+        for task_i in available_tasks:
+            print(f"{task_i}\t", end="")
+            inter_distances[task_i] = []
+
+            for task_j in available_tasks:
+                if task_i == task_j:
+                    distance = 0.0
+                else:
+                    distance = torch.norm(self.task_centroids[task_i] - self.task_centroids[task_j]).item()
+                    inter_distances[task_i].append(distance)
+                print(f"{distance:.1f}\t", end="")
+            print()
+
+        # 3. 用真实测试数据评估路由准确性
+        print(f"\n基于真实测试数据的路由准确性分析:")
+
+        increment = self.args['increment']
+        total_correct = 0
+        total_samples = 0
+
+        for task_id in available_tasks:
+            # 计算该任务的类别范围
+            task_start = task_id * increment
+            task_end = task_start + increment - 1
+            task_classes = set(range(task_start, task_end + 1))
+
+            task_correct = 0
+            task_total = 0
+
+            # 从真实测试数据中提取该任务的样本
+            with torch.no_grad():
+                for _, inputs, targets in self.test_loader:
+                    # 筛选出属于当前任务的样本
+                    task_mask = torch.tensor([t.item() in task_classes for t in targets])
+                    if not task_mask.any():
+                        continue
+
+                    task_inputs = inputs[task_mask].cuda()
+                    task_targets = targets[task_mask]
+
+                    # 计算真实测试样本的投影
+                    real_projections = self.fixed_extractor(task_inputs).cpu()
+
+                    # 为每个样本找最近的质心
+                    for sample_proj in real_projections:
+                        min_dist = float('inf')
+                        predicted_task = task_id
+
+                        for t, centroid in self.task_centroids.items():
+                            dist = torch.norm(sample_proj - centroid).item()
+                            if dist < min_dist:
+                                min_dist = dist
+                                predicted_task = t
+
+                        if predicted_task == task_id:
+                            task_correct += 1
+                        task_total += 1
+
+            if task_total > 0:
+                task_accuracy = task_correct / task_total
+                total_correct += task_correct
+                total_samples += task_total
+
+                print(f"Task {task_id} (类别 {task_start}-{task_end}):")
+                print(f"  真实测试样本: {task_total}")
+                print(f"  路由准确率: {task_accuracy:.1%} ({task_correct}/{task_total})")
+
+                # 计算任务间距离的统计
+                if inter_distances[task_id]:
+                    min_inter = min(inter_distances[task_id])
+                    mean_inter = np.mean(inter_distances[task_id])
+                    print(f"  到其他任务质心距离: 最小={min_inter:.2f}, 均值={mean_inter:.2f}")
+            else:
+                print(f"Task {task_id}: 无真实测试样本")
+
+        if total_samples > 0:
+            overall_accuracy = total_correct / total_samples
+            print(f"\n{'='*30}")
+            print(f"总体路由准确率: {overall_accuracy:.1%} ({total_correct}/{total_samples})")
+            print(f"已分析任务数: {len(available_tasks)}")
+            print(f"使用真实测试数据评估路由性能")
+        else:
+            print(f"\n警告: 没有找到真实测试样本进行路由评估")
+
+        print(f"{'='*60}\n")
+
+    def _collect_all_synthetic_data(self):
+        """收集当前任务的合成数据并自动分析可分性"""
+        task_images, task_labels = self._load_task_synthetic_data(self._cur_task)
+
+        if task_images is not None and task_labels is not None:
+            self.synthetic_data_by_task[self._cur_task] = {
+                'images': task_images,
+                'labels': task_labels
+            }
+            print(f"Task {self._cur_task} 合成数据已收集:")
+            print(f"  图像形状: {task_images.shape}")
+            print(f"  标签形状: {task_labels.shape}")
+
+            # 收集完数据后立即进行可分性分析
+            self.compute_and_analyze_separability()
+        else:
+            print(f"警告: Task {self._cur_task} 合成数据收集失败")
 
     def _track_and_print_test_data_info(self):
         """
@@ -670,22 +850,6 @@ class MoE(BaseLearner):
                 print(f"  警告: 未找到Task {model_idx}的测试数据")
 
         print(f"\n{'=' * 60}\n")
-
-    def _collect_all_synthetic_data(self):
-        """
-        收集所有任务的合成数据和软标签，并按任务ID组织存储
-        """
-        # 初始化按任务ID存储合成数据的字典
-        self.synthetic_data_by_task = {}
-
-        task_images, task_labels = self._load_task_synthetic_data(self._cur_task)
-
-        self.synthetic_data_by_task[self._cur_task] = {
-            'images': task_images,
-            'labels': task_labels
-        }
-        print(self.synthetic_data_by_task[self._cur_task]['images'].shape)
-        print(self.synthetic_data_by_task[self._cur_task]['labels'].shape)
 
     def _load_task_synthetic_data(self, task_id):
         """
