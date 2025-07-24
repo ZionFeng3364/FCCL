@@ -548,6 +548,7 @@ from utils.toolkit import tensor2numpy
 class MoE(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
+        self.increment = args['increment']  # 每个任务的类别增量
         self._network = IncrementalNet(args, False)
         # 添加存储历史模型的列表
         self.global_models = []
@@ -561,12 +562,10 @@ class MoE(BaseLearner):
 
         # 先收集所有合成数据
         self._collect_all_synthetic_data()
-        # 再打印信息
-        self._print_synthetic_data_info()
         # 跟踪和打印测试数据信息
-        self._track_and_print_test_data_info()
+        # self._track_and_print_test_data_info()
         # 测试所有历史模型
-        self._test_all_global_models()
+        # self._test_all_global_models()
         # 测试历史模型在对应任务数据上的表现
         self._test_global_models_on_corresponding_tasks()
 
@@ -679,139 +678,14 @@ class MoE(BaseLearner):
         # 初始化按任务ID存储合成数据的字典
         self.synthetic_data_by_task = {}
 
-        all_images = []
-        all_soft_labels = []
+        task_images, task_labels = self._load_task_synthetic_data(self._cur_task)
 
-        # 收集所有任务（包括当前任务）的数据
-        for task_id in range(self._cur_task + 1):
-            task_images, task_labels = self._load_task_synthetic_data(task_id)
-
-            if task_images is not None:
-                # 按任务ID存储
-                self.synthetic_data_by_task[task_id] = {
-                    'images': task_images,
-                    'labels': task_labels
-                }
-
-                # 合并到总数据中
-                all_images.append(task_images)
-                all_soft_labels.append(task_labels)
-            else:
-                # 任务没有数据时也记录
-                self.synthetic_data_by_task[task_id] = None
-
-        # 合并所有数据
-        if all_images:
-            self.all_synthetic_images = torch.cat(all_images, dim=0)
-            self.all_synthetic_labels = torch.cat(all_soft_labels, dim=0)
-        else:
-            self.all_synthetic_images = None
-            self.all_synthetic_labels = None
-
-    def get_synthetic_data_by_task(self, task_id):
-        """
-        根据特定任务ID获取合成数据
-
-        Args:
-            task_id (int): 任务ID
-
-        Returns:
-            dict: 包含images和labels的字典，如果任务不存在则返回None
-        """
-        if not hasattr(self, 'synthetic_data_by_task'):
-            print(f"警告: 合成数据尚未收集，请先调用 _collect_all_synthetic_data()")
-            return None
-
-        return self.synthetic_data_by_task.get(task_id, None)
-
-    def _print_synthetic_data_info(self):
-        """
-        打印当前任务的合成数据集相关信息以及历史任务的累计信息
-        """
-        # 当前任务的合成数据信息
-        current_data_dir = os.path.join(self.save_dir, "task_{}".format(self._cur_task))
-        current_total_images = 0
-        current_image_files = []
-
-        if os.path.exists(current_data_dir):
-            current_image_files = _collect_all_images(None, current_data_dir)
-            current_total_images = len(current_image_files)
-
-        print(f"\n{'=' * 60}")
-        print(f"Task {self._cur_task} 合成数据集详细信息:")
-        print(f"{'=' * 60}")
-
-        if current_total_images > 0:
-            print(f"当前任务数据目录: {current_data_dir}")
-            print(f"当前任务合成图像数: {current_total_images}")
-            print(f"示例文件: {current_image_files[0]}")
-        else:
-            print(f"当前任务: 未找到合成数据或目录不存在")
-
-        # 统计所有历史任务的合成数据
-        total_historical_images = 0
-        for task_id in range(self._cur_task):
-            task_data_dir = os.path.join(self.save_dir, "task_{}".format(task_id))
-            if os.path.exists(task_data_dir):
-                task_image_files = _collect_all_images(None, task_data_dir)
-                task_images_count = len(task_image_files)
-                total_historical_images += task_images_count
-                print(f"  Task {task_id}: {task_images_count} 个合成图像")
-            else:
-                print(f"  Task {task_id}: 数据目录不存在")
-
-        if self._cur_task > 0:
-            print(f"\n{'=' * 60}")
-            print(f"历史任务合成数据统计:")
-            print(f"{'=' * 60}")
-            print(f"  历史任务合成数据总计: {total_historical_images} 个图像")
-
-        # 总体统计
-        all_images_count = total_historical_images + current_total_images
-        print(f"\n所有任务合成数据总计: {all_images_count} 个图像")
-
-        if self._total_classes > 0:
-            avg_per_class_all = all_images_count / self._total_classes
-            print(f"平均每类合成数据量（所有任务）: {avg_per_class_all:.1f}")
-
-        # 合成数据收集结果
-        if hasattr(self, 'all_synthetic_images') and self.all_synthetic_images is not None:
-            total_samples = self.all_synthetic_images.shape[0]
-            print(f"\n{'=' * 60}")
-            print(f"合成数据收集完成:")
-            print(f"{'=' * 60}")
-            print(f"总样本数: {total_samples}")
-            print(f"图像尺寸: {self.all_synthetic_images.shape}")
-            print(f"软标签尺寸: {self.all_synthetic_labels.shape}")
-        else:
-            print(f"\n警告: 未收集到任何合成数据")
-
-        # 任务和类别信息
-        print(f"\n{'=' * 60}")
-        print(f"任务和类别信息:")
-        print(f"{'=' * 60}")
-        print(f"当前任务ID: {self._cur_task}")
-        print(f"已知类别数: {self._known_classes}")
-        print(f"总类别数: {self._total_classes}")
-
-        if self._cur_task == 0:
-            print(f"当前任务类别数: {self._total_classes}")
-        else:
-            print(f"当前任务新增类别数: {self._total_classes - self._known_classes}")
-
-        # 训练配置信息
-        print(f"\n{'=' * 60}")
-        print(f"训练配置信息:")
-        print(f"{'=' * 60}")
-        print(f"合成批次大小: {synthesis_batch_size}")
-        print(f"采样批次大小: {sample_batch_size}")
-        print(f"生成器训练轮数: {syn_round}")
-        print(f"知识蒸馏步数: {kd_steps}")
-        print(f"生成器学习率: {lr_g}")
-        print(f"潜在向量学习率: {lr_z}")
-        print(f"温度参数T: {T}")
-
-        print(f"{'=' * 60}\n")
+        self.synthetic_data_by_task[self._cur_task] = {
+            'images': task_images,
+            'labels': task_labels
+        }
+        print(self.synthetic_data_by_task[self._cur_task]['images'].shape)
+        print(self.synthetic_data_by_task[self._cur_task]['labels'].shape)
 
     def _load_task_synthetic_data(self, task_id):
         """
@@ -1021,26 +895,19 @@ class MoE(BaseLearner):
         # w_l = [0,80,100,100,150] # id=1,2,3,4
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
         for it in range(self.args["local_ep"]):
-            iter_loader = enumerate(zip((train_data_loader), (self.syn_data_loader)))
-            total_local = 0.0
-            total_syn = 0.0
-            for batch_idx, ((_, images, labels), syn_input) in iter_loader:
-                images, labels, syn_input = images.cuda(), labels.cuda(), syn_input.cuda()
+            iter_loader = enumerate(train_data_loader)
+            for batch_idx, (_, images, labels) in iter_loader:
+                images, labels = images.cuda(), labels.cuda()
                 fake_targets = labels - self._known_classes
                 output = model(images)["logits"]
                 # for new tasks
                 loss_ce = F.cross_entropy(output[:, self._known_classes:], fake_targets)
-                s_out = model(syn_input)["logits"]
-                with torch.no_grad():
-                    t_out = teacher(syn_input.detach())["logits"]
-                    total_syn += syn_input.shape[0]
-                    total_local += images.shape[0]
                 loss = loss_ce
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-        return model.state_dict(), total_syn, total_local
+        return model.state_dict(), 0.0, 0.0
 
     def _fl_train(self, train_dataset, test_loader):
         self._network.cuda()
