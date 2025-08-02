@@ -547,7 +547,7 @@ def refine_as_not_true(logits, targets, num_classes):
 from utils.toolkit import tensor2numpy
 
 class FixedRandomExtractor(nn.Module):
-    def __init__(self, projection_dim=512, seed=42):
+    def __init__(self, seed=42):
         super().__init__()
         torch.manual_seed(seed)
 
@@ -558,28 +558,27 @@ class FixedRandomExtractor(nn.Module):
         # 移除最后的分类层，保留特征提取部分
         self.backbone = nn.Sequential(*list(self.backbone.children())[:-1])  # 移除最后的fc层
 
-        # 添加自定义投影层
-        self.projection = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(512, projection_dim, bias=False)  # ResNet18的feature dim是512
-        )
+        # 添加展平层
+        self.flatten = nn.Flatten()
 
         # 冻结预训练backbone的所有参数
         for param in self.backbone.parameters():
             param.requires_grad = False
 
-        # 冻结投影层参数（使其成为固定的随机投影）
-        for param in self.projection.parameters():
-            param.requires_grad = False
-
-        print(f"固定预训练ResNet18投影器初始化完成 (种子: {seed}, 输出维度: {projection_dim})")
+        print(f"固定预训练ResNet18特征提取器初始化完成 (种子: {seed}, 输出维度: 512)")
 
     def forward(self, x):
         # 通过预训练的ResNet18提取特征
         features = self.backbone(x)  # [B, 512, 1, 1]
-        # 通过固定的随机投影层
-        projected = self.projection(features)  # [B, projection_dim]
-        return projected
+        # 展平特征
+        flattened = self.flatten(features)  # [B, 512]
+        return flattened
+
+    # return a copy of its own
+    def clone(self):
+        clone = FixedRandomExtractor(seed=42)
+        clone.load_state_dict(self.state_dict())
+        return clone.cuda()
 
 class MoE(BaseLearner):
     def __init__(self, args):
@@ -589,8 +588,7 @@ class MoE(BaseLearner):
         # 添加存储历史模型的列表
         self.global_models = []
 
-        self.fixed_extractor = FixedRandomExtractor(projection_dim=self._network.feature_dim,
-                                                    seed=self.seed)
+        self.fixed_extractor = FixedRandomExtractor(seed=self.seed)
         self.fixed_extractor.cuda()
         self.task_centroids = {}
         self.synthetic_data_by_task = {}
